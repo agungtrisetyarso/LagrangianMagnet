@@ -1,94 +1,118 @@
-"""Numerical verification for 'Lagrangian-native quantum simulation of quantum magnets'."""
-import numpy as np, itertools
-from scipy.linalg import expm
-rng=np.random.default_rng(7)
-def spin(S):
-    d=int(round(2*S+1)); m=S-np.arange(d)
-    Jz=np.diag(m); Jp=np.zeros((d,d))
-    for k in range(1,d): Jp[k-1,k]=np.sqrt(S*(S+1)-m[k]*(m[k]+1))
-    return (Jp+Jp.T)/2,(Jp-Jp.T)/(2j),Jz
-def coh(S,n):
-    Jx,Jy,Jz=spin(S); th=np.arccos(np.clip(n[2],-1,1)); ph=np.arctan2(n[1],n[0])
-    top=np.zeros(len(Jz)); top[0]=1
-    # north-pole gauge R = e^{-i ph Jz} e^{-i th Jy} e^{+i ph Jz}
-    return expm(-1j*ph*Jz)@expm(-1j*th*Jy)@expm(1j*ph*Jz)@top
-def tetra(): v=np.array([[1,1,1],[1,-1,-1],[-1,1,-1],[-1,-1,1]])/np.sqrt(3); return v
-def octa(): return np.vstack([np.eye(3),-np.eye(3)])
-def icosa():
-    p=(1+5**.5)/2; v=[]
-    for a in (1,-1):
-        for b in (p,-p): v+= [[0,a,b],[a,b,0],[b,0,a]]
-    v=np.array(v,float); return v/np.linalg.norm(v,axis=1)[:,None]
-def T(S,F,h):  # frame (Toeplitz) quantization of single-site symbol
-    d=int(2*S+1); return d/len(F)*sum(h(n)*np.outer(coh(S,n),coh(S,n).conj()) for n in F)
-ok=lambda A,B:np.allclose(A,B,atol=1e-10)
-print("== L1 frame identity ==")
-for S,F,name in [(.5,tetra(),'tetra'),(1,octa(),'octa'),(1,icosa(),'icosa'),(2,icosa(),'icosa'),(2.5,icosa(),'icosa')]:
-    print(S,name,ok(T(S,F,lambda n:1),np.eye(int(2*S+1))))
-print("== L3 T[n^a]=J^a/(S+1) ==")
-for S,F in [(.5,tetra()),(1,octa()),(2,icosa())]:
-    J=spin(S); print(S,all(ok(T(S,F,lambda n,a=a:n[a]),J[a]/(S+1)) for a in range(3)))
-print("== l=2 symbol: T[n_z^2] = alpha Jz^2 + beta ==")
-for S in [1,1.5,2]:
-    J=spin(S); A=T(S,icosa(),lambda n:n[2]**2); d=int(2*S+1)
-    X=np.array([np.diag(J[2]@J[2]).real,np.ones(d)]).T; c=np.linalg.lstsq(X,np.diag(A).real,rcond=None)[0]
-    print(S,c, 'pred',2/((S+1)*(2*S+3)), 1/(2*S+3))
-print("spin-1/2: T[n_z^2] =",np.round(T(.5,octa(),lambda n:n[2]**2),12).real.tolist(),"(octa is 3-design)")
-print("== L2 Berry overlap phase ==")
-def Om(a,b,c): return 2*np.arctan2(a@np.cross(b,c),1+a@b+b@c+c@a)
-z=np.array([0,0,1.]); maxerr=0
-for S in [.5,1,1.5,3]:
-    for _ in range(200):
-        a,b=rng.normal(size=(2,3)); a/=np.linalg.norm(a); b/=np.linalg.norm(b)
-        ov=coh(S,b).conj()@coh(S,a)
-        pred=((1+a@b)/2)**(S)*np.exp(-1j*S*Om(z,a,b))
-        maxerr=max(maxerr,abs(ov-pred))
-print("max |<b|a> - ((1+a.b)/2)^S e^{-iS Omega(z,a,b)}| =",maxerr)
-print("== L4 gauge quantization of closed loops ==")
-for _ in range(3):
-    loop=rng.normal(size=(7,3)); loop/=np.linalg.norm(loop,axis=1)[:,None]
-    r,rp=rng.normal(size=(2,3)); r/=np.linalg.norm(r); rp/=np.linalg.norm(rp)
-    D=sum(Om(r,loop[k],loop[(k+1)%7])-Om(rp,loop[k],loop[(k+1)%7]) for k in range(7))
-    print("Delta/(4pi) =",round(D/(4*np.pi),10))
-print("== T1 frame path-sum convergence (Heisenberg) ==")
-def manybody(S,F,N,bonds,Tt,dts):
-    d=int(2*S+1); M=len(F); J=spin(S)
-    cs=[coh(S,n) for n in F]
-    def emb(op,i): return np.kron(np.kron(np.eye(d**i),op),np.eye(d**(N-i-1)))
-    H=sum(emb(J[a],i)@emb(J[a],j) for (i,j) in bonds for a in range(3))
-    hmax=(S+1)**2*len(bonds)
-    # product frame
-    P=[];hv=[]
-    for idx in itertools.product(range(M),repeat=N):
-        v=cs[idx[0]]
-        for k in idx[1:]: v=np.kron(v,cs[k])
-        P.append(v); hv.append((S+1)**2*sum(F[idx[i]]@F[idx[j]] for (i,j) in bonds))
-    P=np.array(P); hv=np.array(hv); w=(d/M)**N
-    Ex=expm(-1j*Tt*H); out=[]
-    assert ok(w*(P.T*hv)@P.conj(),H), "T[h] != H"
-    for dt in dts:
-        n=int(round(Tt/dt)); A=w*(P.T*np.exp(-1j*dt*hv))@P.conj()
-        err=np.linalg.norm(np.linalg.matrix_power(A,n)-Ex,2)
-        out.append((dt,err,Tt*dt*np.max(np.abs(hv))**2))
-    return out
-res={}
-res['tri12']=manybody(.5,tetra(),3,[(0,1),(1,2),(2,0)],1.0,[0.2,0.1,0.05,0.025,0.0125,0.00625])
-res['ring12']=manybody(.5,tetra(),4,[(0,1),(1,2),(2,3),(3,0)],1.0,[0.2,0.1,0.05,0.025,0.0125,0.00625])
-res['tri1']=manybody(1,octa(),3,[(0,1),(1,2),(2,0)],1.0,[0.1,0.05,0.025,0.0125,0.00625])
-for k,v in res.items():
-    print(k); [print(f"  dt={a:.5f} err={b:.3e} bound={c:.3e}") for a,b,c in v]
-    sl=np.polyfit(np.log([x[0] for x in v]),np.log([x[1] for x in v]),1)[0]; print("  slope",round(sl,3))
-np.save('conv.npy',res,allow_pickle=True)
-print("== Block-encoding normalisation, S=1/2 Heisenberg bond ==")
-F=tetra(); hv=np.array([(9/4)*F[a]@F[b] for a in range(4) for b in range(4)])
-print("l1 lambda =",(1/4)*np.abs(hv).sum()," uniform Lambda =",4*np.abs(hv).max()," ||S.S|| = 0.75")
-print("== P4 frame estimator ==")
-S=1;F=icosa();d=3; psi=rng.normal(size=3)+1j*rng.normal(size=3); psi/=np.linalg.norm(psi)
-g=lambda n: n[0]-2*n[1]*1+0.3*n[2]
-Q=np.array([abs(coh(S,n).conj()@psi)**2 for n in F]); p=d/len(F)*Q
-print("sum p =",p.sum()," E[g]=",p@np.array([g(n) for n in F])," <T[g]>=",(psi.conj()@T(S,F,g)@psi).real)
-print("== Berezin-Lieb: min h <= spec T[h] ==")
-S=.5;N=3;bonds=[(0,1),(1,2),(2,0)]; J=spin(S)
-emb=lambda op,i: np.kron(np.kron(np.eye(2**i),op),np.eye(2**(N-i-1)))
-H=sum(emb(J[a],i)@emb(J[a],j) for (i,j) in bonds for a in range(3))
-print("E0 =",np.linalg.eigvalsh(H)[0]," lower bound (S+1)^2*min_cl =",(1.5**2)*(-1.5)," upper bound S^2*min_cl =",0.25*(-1.5))
+"""Lemma 1 (finite resolution), Lemma 2 (Berry phase / projector), Proposition 1(iv)
+(first-order symbols) and Theorem 2(a) (reference independence <=> 2*kappa in Z).
+
+Every check compares the finite-frame object with an independent matrix computation:
+  * Lemma 1: frame sums vs exact cubature (Gauss product rule) and vs the analytic operator;
+  * Lemma 2: the closed-form phase vs the overlap computed from the state vectors;
+  * the projector property of the kernel G built from Omega (not from overlaps).
+"""
+import numpy as np
+
+from lmcore import (Checker, FRAMES, Om, ZHAT, coh, design_strength, dim, gauss_sphere,
+                    generic, product_states, spin, unit, configs, TOL_IDENTITY, TOL_INTEGER)
+
+C = Checker("verify_all")
+rng = np.random.default_rng(20261019)
+SPINS = [0.5, 1, 1.5, 2, 2.5, 3]
+
+
+def T1(S, pts, w, h):
+    """Single-site Toeplitz map with weights w (sum w = 1): d * sum w h(n) |n><n|."""
+    d = dim(S)
+    out = np.zeros((d, d), complex)
+    for n, wi in zip(pts, w):
+        v = coh(S, n)
+        out += wi * h(n) * np.outer(v, v.conj())
+    return d * out
+
+
+out = {"lemma1": [], "lemma2": {}, "projector": [], "theorem2a": {}}
+
+print("== Lemma 1: frame sum vs exact cubature ==")
+Q, wQ = gauss_sphere(14)          # exact up to degree 14 (>= 2S+2 for S <= 6)
+for fname, f in FRAMES.items():
+    F = f()
+    t = design_strength(F)
+    wF = np.full(len(F), 1 / len(F))
+    for S in SPINS:
+        row = {"frame": fname, "M": len(F), "t": t, "S": S}
+        for label, q, h in (("identity", 0, lambda n: 1.0),
+                            ("n_x", 1, lambda n: n[0]),
+                            ("n_z^2", 2, lambda n: n[2] ** 2),
+                            ("n_x n_y", 2, lambda n: n[0] * n[1])):
+            dev = np.abs(T1(S, F, wF, h) - T1(S, Q, wQ, h)).max()
+            row[label] = dev
+            if t >= 2 * S + q:
+                C.check(f"L1 {fname} (t={t}) S={S} {label}", dev, TOL_IDENTITY)
+        out["lemma1"].append(row)
+# negative controls: hypothesis t >= 2S+q violated
+neg = [r for r in out["lemma1"] if r["t"] < 2 * r["S"]]
+worst = min(r["identity"] for r in neg)
+C.check("L1 negative control: min deviation when t < 2S (must exceed 1e-3)", worst, 0,
+        ok=worst > 1e-3)
+
+print("== Proposition 1(iv), first order: T[n_a] = J_a/(S+1) ==")
+for S in SPINS:
+    J = spin(S)
+    dev = max(np.abs(T1(S, Q, wQ, lambda n, a=a: n[a]) - J[a] / (S + 1)).max() for a in range(3))
+    C.check(f"P1(iv) S={S}", dev, TOL_IDENTITY)
+
+print("== Lemma 2: overlap = rho * exp(-i S Omega(z,a,b)) ==")
+for S in SPINS:
+    err = 0.0
+    for _ in range(2000):
+        a, b = unit(rng.normal(size=(2, 3)))
+        ov = coh(S, b).conj() @ coh(S, a)
+        pred = ((1 + a @ b) / 2) ** S * np.exp(-1j * S * Om(ZHAT, a, b))
+        err = max(err, abs(ov - pred))
+    out["lemma2"][str(S)] = err
+    C.check(f"L2 S={S} (2000 random pairs)", err, TOL_IDENTITY)
+# negative control: the formula is gauge-singular at n = -z
+S = 1
+a, b = -ZHAT, unit([0.3, 0.2, 0.9])
+dev = abs(coh(S, b).conj() @ coh(S, a) - ((1 + a @ b) / 2) ** S * np.exp(-1j * S * Om(ZHAT, a, b)))
+out["lemma2"]["at_minus_z"] = dev
+C.check("L2 negative control at n_a = -z (must fail)", dev, 0, ok=dev > 1e-3)
+
+print("== Lemma 2: kernel G built from Omega is a rank-d^N orthogonal projector ==")
+for fname, S, N in (("tetrahedral", 0.5, 3), ("two-tetrahedral", 0.5, 2),
+                    ("octahedral", 1, 2), ("cube", 1, 2), ("icosahedral", 1.5, 2)):
+    F = generic(FRAMES[fname]())        # generic orientation: -z is not a frame point
+    d, M = dim(S), len(F)
+    A = configs(M, N)
+    n = F[A]                              # (C, N, 3)
+    na, nb = n[None, :, :, :], n[:, None, :, :]
+    rho = np.prod(np.clip((1 + np.einsum("...i,...i", na, nb)) / 2, 0, None) ** S, axis=-1)
+    L0 = -S * Om(ZHAT, na, nb).sum(-1)
+    G = (d / M) ** N * np.where(rho > 0, rho * np.exp(1j * np.nan_to_num(L0)), 0)
+    P = product_states(S, F, N)
+    dev_vv = np.abs(G - (d / M) ** N * P.conj() @ P.T).max()
+    dev_idem = np.abs(G @ G - G).max()
+    dev_herm = np.abs(G - G.conj().T).max()
+    rank = np.linalg.matrix_rank(G, tol=1e-8)
+    out["projector"].append({"frame": fname, "S": S, "N": N, "VVdag": dev_vv,
+                             "idempotent": dev_idem, "hermitian": dev_herm, "rank": int(rank),
+                             "d^N": d ** N})
+    C.check(f"L2 G=VV^dag {fname} S={S} N={N}", dev_vv, TOL_IDENTITY)
+    C.check(f"L2 G^2=G {fname} S={S} N={N}", dev_idem, TOL_IDENTITY)
+    C.check(f"L2 rank G = d^N = {d ** N} ({fname})", rank - d ** N, 0)
+
+print("== Theorem 2(a): reference change is 4*pi*Z on closed loops ==")
+resid, ms = 0.0, []
+for _ in range(500):
+    K = rng.integers(3, 13)
+    loop = unit(rng.normal(size=(K, 3)))
+    r, rp = unit(rng.normal(size=(2, 3)))
+    D = sum(Om(r, loop[k], loop[(k + 1) % K]) - Om(rp, loop[k], loop[(k + 1) % K])
+            for k in range(K)) / (4 * np.pi)
+    resid = max(resid, abs(D - round(D)))
+    ms.append(int(round(D)))
+vals, counts = np.unique(ms, return_counts=True)
+out["theorem2a"] = {"max_residual": resid, "m_histogram": dict(zip(map(int, vals), map(int, counts)))}
+C.check("T2(a) max |Delta/4pi - nearest integer| over 500 loops", resid, TOL_INTEGER)
+C.check("T2(a) m = +-1 occurs (needed for 'only if')", 0, 0, ok=(1 in ms or -1 in ms))
+kappa = 0.3
+C.check("T2(a) kappa=0.3 gives a reference-dependent phase",
+        abs(np.exp(4j * np.pi * kappa) - 1), 0, ok=abs(np.exp(4j * np.pi * kappa) - 1) > 0.1)
+
+C.finish(out)
