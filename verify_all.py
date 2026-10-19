@@ -111,6 +111,39 @@ vals, counts = np.unique(ms, return_counts=True)
 out["theorem2a"] = {"max_residual": resid, "m_histogram": dict(zip(map(int, vals), map(int, counts)))}
 C.check("T2(a) max |Delta/4pi - nearest integer| over 500 loops", resid, TOL_INTEGER)
 C.check("T2(a) m = +-1 occurs (needed for 'only if')", 0, 0, ok=(1 in ms or -1 in ms))
+# branch conventions: Omega is undefined exactly when two vertices are antipodal, because
+#   num^2 + den^2 = 2 (1+a.b)(1+b.c)(1+c.a);
+# on great-circle (num = 0) triangles it takes the value +-2pi, which is harmless mod 4pi.
+def cocycle(a, b, c, d):
+    return (Om(b, c, d) - Om(a, c, d) + Om(a, b, d) - Om(a, b, c)) / (4 * np.pi)
+
+
+idw = 0.0
+for _ in range(20000):
+    a_, b_, c_ = unit(rng.normal(size=(3, 3)))
+    num = a_ @ np.cross(b_, c_)
+    den = 1 + a_ @ b_ + b_ @ c_ + c_ @ a_
+    idw = max(idw, abs(num ** 2 + den ** 2 - 2 * (1 + a_ @ b_) * (1 + b_ @ c_) * (1 + c_ @ a_)))
+C.check("identity num^2+den^2 = 2(1+a.b)(1+b.c)(1+c.a)", idw, TOL_IDENTITY)
+deg = 0.0
+for _ in range(20000):
+    u = unit(rng.normal(size=3))
+    w = unit(np.cross(u, rng.normal(size=3)))
+    k3 = rng.integers(3, 5)                       # 3 or 4 of the points on one great circle
+    th = rng.uniform(0, 2 * np.pi, 4)
+    pts = [np.cos(t) * u + np.sin(t) * w for t in th]
+    if k3 == 3:
+        pts[3] = unit(rng.normal(size=3))
+    x = cocycle(*pts)
+    deg = max(deg, abs(x - round(x)))
+out["theorem2a"]["great_circle_cocycle_max_residual"] = deg
+C.check("cocycle in 4piZ on 20000 great-circle (degenerate) quadruples", deg, TOL_INTEGER)
+reg_worst = 0.0
+for _ in range(20000):
+    x = cocycle(*unit(rng.normal(size=(4, 3))))
+    reg_worst = max(reg_worst, abs(x - round(x)))
+out["theorem2a"]["generic_cocycle_max_residual"] = reg_worst
+C.check("cocycle in 4piZ on 20000 generic quadruples", reg_worst, TOL_INTEGER)
 kappa = 0.3
 C.check("T2(a) kappa=0.3 gives a reference-dependent phase",
         abs(np.exp(4j * np.pi * kappa) - 1), 0, ok=abs(np.exp(4j * np.pi * kappa) - 1) > 0.1)

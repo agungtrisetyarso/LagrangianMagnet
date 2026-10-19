@@ -11,7 +11,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS = ["verify_all.py", "verify_pathsum.py", "verify_anisotropy.py", "verify_theta.py",
-           "theta_pairs.py", "theta_consistency.py", "verify_overhead.py"]
+           "theta_transfer.py", "verify_overhead.py"]
 
 status = {}
 for s in SCRIPTS:
@@ -23,13 +23,14 @@ for s in SCRIPTS:
     if r.returncode:
         print(r.stdout[-3000:], r.stderr[-3000:])
 subprocess.run([sys.executable, os.path.join(HERE, "make_fig1.py")], cwd=HERE, check=True)
+t0 = time.time()
+r = subprocess.run([sys.executable, os.path.join(HERE, "independent_check.py")], cwd=HERE,
+                   capture_output=True, text=True)
+status["independent_check.py"] = (r.returncode, time.time() - t0)
+print(r.stdout.strip().splitlines()[-1], f"[{status['independent_check.py'][1]:.1f}s]")
 
 R = lambda n: json.load(open(os.path.join(HERE, "results", n + ".json")))
-va, ps, an, th, tp, tc, ov = (R(n[:-3]) for n in SCRIPTS)
-
-
-def case(frame, S, L):
-    return next(c for c in tc["cases"] if c["frame"] == frame and c["S"] == S and c["L"] == L)
+va, ps, an, th, tt, ov = (R(n[:-3]) for n in SCRIPTS)
 
 
 lines = ["# Summary of reproduced numbers", "",
@@ -59,15 +60,17 @@ for s in (0, 1, 2):
         f"{abs(fb[f'seed{s}_n256'][-1]['eps']):.1e}", "verify_theta.py")
 add("Theorem 3(ii): C^2 history, fitted decay exponent of |eps|",
     f"{th['finite_smooth']['fitted_exponent']:.2f}", "verify_theta.py")
-for fr, S, L in (("tetrahedral", 0.5, 4), ("tetrahedral", 1, 4), ("tetrahedral", 0.5, 6),
-                 ("tetrahedral", 0.5, 8), ("two-tetrahedral", 0.5, 4)):
-    c = case(fr, S, L)
-    add(f"Theorem 4(iii): {fr}, S={S}, L={L}: max norm / max spectral radius",
-        f"{c['norm_peak'][1]:.4f} at {c['norm_peak'][0]:.3f}pi / "
-        f"{c['radius_peak'][1]:.4f} at {c['radius_peak'][0]:.3f}pi", "theta_consistency.py")
-add("Lemma 3: q on tetra / octa / cube / icosa",
-    ", ".join(f"{p['q']:+.4f}" for p in tp["pairs"] if p["S"] == 1 and p["frame"] in
-              ("tetrahedral", "octahedral", "cube", "icosahedral")), "theta_pairs.py")
+add("Cocycle in 4piZ: generic / great-circle quadruples (max residue)",
+    f"{va['theorem2a']['generic_cocycle_max_residual']:.1e} / "
+    f"{va['theorem2a']['great_circle_cocycle_max_residual']:.1e}", "verify_all.py")
+add("Lemma 3(ii): Q of the two-step history (all cases)",
+    ", ".join(sorted({f"{x['Q']:+.0f}" for x in tt['lemma3']})), "theta_transfer.py")
+for c in tt["cases"]:
+    g = c["free_pathsum_norms_n=2,4,8,16,32,64"]
+    add(f"Thm 4: {c['frame']}, S={c['S']}, L={c['L']}: k-residue; max rho(K_E); "
+        "||V^dag K^63 V|| at dtheta=pi / 2pi",
+        f"{c['k_residue']:.1e}; {c['max_radius'][1]:.4f} at {c['max_radius'][0]:.2f}pi; "
+        f"{g['1.0pi'][-1]:.2e} / {g['2.0pi'][-1]:.3f}", "theta_transfer.py")
 add("App. C: Lambda/||H|| bond S=1/2, S=1",
     f"{ov['bond'][0]['Lambda/||H||']:.2f}, {ov['bond'][1]['Lambda/||H||']:.2f}", "verify_overhead.py")
 add("App. C: Lambda/||H|| J1-J2 rings N=16, J2=0,0.2,0.5",
